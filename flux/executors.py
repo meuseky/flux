@@ -5,6 +5,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Process, Queue
 from flux.config import Configuration
+from flux.plugins import PluginManager, ExecutorPlugin
 from flux.scheduler import Scheduler, TaskInfo
 
 
@@ -154,6 +155,15 @@ class DistributedExecutor(AbstractExecutor):
 def get_executor() -> AbstractExecutor:
     config = Configuration.get().settings.executor
     mode = config.execution_mode
+    plugin_manager = PluginManager.default()
+
+    # Check for plugin-based executor
+    if mode not in ["local", "distributed"]:
+        plugin = plugin_manager.get_plugin(mode)
+        if isinstance(plugin, ExecutorPlugin):
+            return plugin.executor_class()
+        raise ValueError(f"Unknown execution mode or plugin: {mode}")
+
     if mode == "local":
         return LocalExecutor(max_workers=config.max_workers)
     elif mode == "distributed":

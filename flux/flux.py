@@ -12,6 +12,7 @@ from flux import ContextManager
 from flux.api import create_app
 from flux.catalogs import WorkflowCatalog
 from flux.config import Configuration
+from flux.plugins import plugin, PluginManager
 from flux.utils import import_module_from_file
 from flux.utils import parse_value
 from flux.utils import to_json
@@ -25,6 +26,10 @@ def cli():
 @cli.group()
 def workflow():
     pass
+
+
+# Add plugin CLI group
+cli.add_command(plugin)
 
 
 @workflow.command("list")
@@ -174,6 +179,21 @@ def debug_workflow(execution_id: str):
         click.echo(to_json(ctx.to_dict()))
     except Exception as ex:
         click.echo(f"Error debugging workflow: {str(ex)}", err=True)
+
+
+@cli.command()
+@click.argument("path")
+@click.option("--host", "-h", default=None, help="Host to bind the server to.")
+@click.option("--port", "-p", default=None, help="Port to bind the server to.")
+def start(path: str, host: str | None = None, port: int | None = None):
+    """Start the server to execute Workflows via API."""
+    PluginManager.default().load_plugins()  # Load plugins on startup
+    settings = Configuration.get().settings
+    uvicorn.run(
+        create_app(path),
+        port=port or settings.server_port,
+        host=host or settings.server_host,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

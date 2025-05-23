@@ -10,6 +10,7 @@ from typing import Any
 import dill
 
 from flux.config import Configuration
+from flux.plugins import PluginManager, StoragePlugin
 
 
 @dataclass
@@ -161,3 +162,17 @@ class LocalFileStorage(OutputStorage):
     def __deserialize(self, value: bytes, serializer: str) -> Any:
         _serializer = serializer or self.serializer
         return json.loads(value) if _serializer == "json" else dill.loads(value)
+
+
+class OutputStorageFactory:
+    @staticmethod
+    def get_storage(storage_type: str) -> OutputStorage:
+        plugin_manager = PluginManager.default()
+        plugin = plugin_manager.get_plugin(storage_type)
+        if isinstance(plugin, StoragePlugin):
+            return plugin.storage_class()
+        if storage_type == "inline":
+            return InlineOutputStorage()
+        elif storage_type == "local_file":
+            return LocalFileStorage()
+        raise ValueError(f"Unknown storage type: {storage_type}")

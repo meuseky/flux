@@ -56,6 +56,8 @@ class FluxConfig(BaseSettings):
     executor: ExecutorConfig = Field(default_factory=ExecutorConfig)
     security: EncryptionConfig = Field(default_factory=EncryptionConfig)
     catalog: CatalogConfig = Field(default_factory=CatalogConfig)
+    storage: dict[str, Any] = Field(default_factory=dict, description="Storage backend configuration")
+    plugins: dict[str, Any] = Field(default_factory=dict, description="Plugin configuration")
 
     @field_validator("serializer")
     def validate_serializer(cls, v: str) -> str:
