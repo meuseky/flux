@@ -23,6 +23,11 @@ class ExecutorConfig(BaseConfig):
     retry_backoff: int = Field(default=2, description="Default backoff multiplier for retries")
     execution_mode: str = Field(default="local", description="Execution mode: 'local' or 'distributed'")
     distributed_config: dict[str, Any] = Field(default_factory=dict, description="Configuration for distributed execution")
+    available_cpu: int = Field(default=4, description="Available CPU cores")
+    available_memory: float = Field(default=8, description="Available memory in GB")
+    available_gpu: int = Field(default=0, description="Available GPU units")
+    default_priority: int = Field(default=10, description="Default task priority (lower is higher)")
+    external_scheduler: Optional[Dict[str, Any]] = Field(default=None, description="Configuration for external schedulers like Kubernetes or Airflow")
 
 class EncryptionConfig(BaseConfig):
     encryption_key: str | None = Field(default=None, description="Encryption key for sensitive data")

@@ -14,13 +14,18 @@ database_url = "sqlite:///.flux/flux.db" # Database URL
 auto_register = true # Automatically register workflows in the catalog on startup
 
 [flux.executor]
-execution_mode = "local"  # or "distributed"
+execution_mode = "local"
 max_workers = 4
 default_timeout = 0
 retry_attempts = 3
 retry_delay = 1
 retry_backoff = 2
+available_cpu = 4
+available_memory = 8  # GB
+available_gpu = 1
+default_priority = 10
 distributed_config = { num_workers = 2 }  # Placeholder for queuing system config
+external_scheduler = { type = "none" }  # Options: "kubernetes", "airflow"
 
 [flux.security]
 encryption_key = "SUPER_SECRET_KEY" # Master encryption key for sensitive data, this is just an example :P

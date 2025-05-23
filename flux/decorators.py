@@ -1,176 +1,306 @@
 from __future__ import annotations
 import asyncio
-import random
-import uuid
-from collections.abc import Awaitable, Coroutine
-from datetime import datetime, timedelta
-from typing import Any, Callable, List, Literal, TypeVar
-import flux.decorators as decorators
-from flux.catalogs import WorkflowCatalog
+import inspect
+import time
+from functools import wraps
+from typing import Any, Callable, TypeVar, Optional, Dict
+from datetime import datetime
+from flux.cache import CacheManager
 from flux.context import WorkflowExecutionContext
-from flux.errors import PauseRequested
+from flux.context_managers import ContextManager
+from flux.errors import ExecutionError, ExecutionTimeoutError, PauseRequested, RetryError
 from flux.events import ExecutionEvent, ExecutionEventType
+from flux.output_storage import OutputStorage
+from flux.secret_managers import SecretManager
+from flux.utils import make_hashable, maybe_awaitable
 from flux.executors import get_executor
+from flux.scheduler import Scheduler, TaskInfo
 
-T = TypeVar("T", bound=Any)
+F = TypeVar("F", bound=Callable[..., Any])
 
-@decorators.task
-async def now() -> datetime:
-    return datetime.now()
+def get_func_args(func: Callable, args: tuple) -> dict:
+    arg_names = inspect.getfullargspec(func).args
+    arg_values: list[Any] = []
+    for arg in args:
+        if isinstance(arg, workflow):
+            arg_values.append(arg.name)
+        elif inspect.isclass(type(arg)) and isinstance(arg, Callable):
+            arg_values.append(arg)
+        elif isinstance(arg, Callable):
+            arg_values.append(arg.__name__)
+        elif isinstance(arg, list):
+            arg_values.append(tuple(arg))
+        else:
+            arg_values.append(arg)
+    return dict(zip(arg_names, arg_values))
 
-@decorators.task
-async def uuid4() -> uuid.UUID:
-    return uuid.uuid4()
+class workflow:
+    @staticmethod
+    def with_options(name: str | None = None, secret_requests: list[str] = [], output_storage: OutputStorage | None = None) -> Callable[[F], workflow]:
+        def wrapper(func: F) -> workflow:
+            return workflow(func=func, name=name, secret_requests=secret_requests, output_storage=output_storage)
+        return wrapper
 
-@decorators.task
-async def choice(options: list[Any]) -> int:
-    return random.choice(options)
+    def __init__(self, func: F, name: str | None = None, secret_requests: list[str] = [], output_storage: OutputStorage | None = None):
+        self._func = func
+        self.name = name if name else func.__name__
+        self.secret_requests = secret_requests
+        self.output_storage = output_storage
+        wraps(func)(self)
 
-@decorators.task
-async def randint(a: int, b: int) -> int:
-    return random.randint(a, b)
+    async def __call__(self, ctx: WorkflowExecutionContext, *args) -> Any:
+        if ctx.finished:
+            return ctx
+        self.id = f"{ctx.name}_{ctx.execution_id}"
+        if ctx.paused:
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.WORKFLOW_RESUMED, source_id=self.id, name=ctx.name, value=ctx.input))
+        elif not ctx.started:
+            ctx.events.append(ExecutionEvent(ExecutionEventType.WORKFLOW_STARTED, self.id, ctx.name, ctx.input))
+        try:
+            token = WorkflowExecutionContext.set(ctx)
+            output = await maybe_awaitable(self._func(ctx))
+            WorkflowExecutionContext.reset(token)
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.WORKFLOW_COMPLETED, source_id=self.id, name=ctx.name, value=self.output_storage.store(self.id, output) if self.output_storage else output))
+        except PauseRequested as ex:
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.WORKFLOW_PAUSED, source_id=self.id, name=ctx.name, value=ex.name))
+        except ExecutionError as ex:
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.WORKFLOW_FAILED, source_id=self.id, name=ctx.name, value=ex))
+        except Exception as ex:
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.WORKFLOW_FAILED, source_id=self.id, name=ctx.name, value=ex))
+        ContextManager.default().save(ctx)
+        return ctx
 
-@decorators.task
-async def randrange(start: int, stop: int | None = None, step: int = 1):
-    return random.randrange(start, stop, step)
+    def run(self, *args, **kwargs) -> WorkflowExecutionContext:
+        ctx = ContextManager.default().get(kwargs["execution_id"]) if "execution_id" in kwargs else WorkflowExecutionContext(self.name, *args)
+        return asyncio.run(self(ctx))
 
-@decorators.task
-async def parallel(*functions: Coroutine[Any, Any, Any]) -> list[Any]:
-    """Execute tasks in parallel using the configured executor."""
-    executor = get_executor()
-    try:
-        return await executor.execute_parallel(list(functions))
-    finally:
-        executor.shutdown()
+class TaskMetadata:
+    def __init__(self, task_id: str, task_name: str):
+        self.task_id = task_id
+        self.task_name = task_name
 
-@decorators.task
-async def sleep(duration: float | timedelta):
-    if isinstance(duration, timedelta):
-        duration = duration.total_seconds()
-    await asyncio.sleep(duration)
+    def __repr__(self):
+        return f"TaskMetadata(task_id={self.task_id}, task_name={self.task_name})"
 
-@decorators.task.with_options(name="call_workflow_{workflow}")
-async def call(workflow: str | decorators.workflow, *args):
-    if isinstance(workflow, str):
-        workflow = WorkflowCatalog.create().get(workflow)
-    ctx = await workflow(WorkflowExecutionContext(workflow.name, *args))
-    return ctx.output
+class task:
+    @staticmethod
+    def with_options(
+        name: str | None = None,
+        fallback: Callable | None = None,
+        rollback: Callable | None = None,
+        retry_max_attempts: int = 0,
+        retry_delay: int = 1,
+        retry_backoff: int = 2,
+        timeout: int = 0,
+        secret_requests: list[str] = [],
+        output_storage: OutputStorage | None = None,
+        cache: bool = False,
+        metadata: bool = False,
+        priority: int = 10,
+        deadline: Optional[datetime] = None,
+        resource_requirements: Optional[Dict[str, Any]] = None,
+        schedule: Optional[str] = None,
+        event_trigger: Optional[Dict[str, str]] = None
+    ) -> Callable[[F], task]:
+        def wrapper(func: F) -> task:
+            return task(
+                func=func,
+                name=name,
+                fallback=fallback,
+                rollback=rollback,
+                retry_max_attempts=retry_max_attempts,
+                retry_delay=retry_delay,
+                retry_backoff=retry_backoff,
+                timeout=timeout,
+                secret_requests=secret_requests,
+                output_storage=output_storage,
+                cache=cache,
+                metadata=metadata,
+                priority=priority,
+                deadline=deadline,
+                resource_requirements=resource_requirements,
+                schedule=schedule,
+                event_trigger=event_trigger
+            )
+        return wrapper
 
-@decorators.task
-async def pipeline(*tasks: Callable, input: Any):
-    result = input
-    for task in tasks:
-        result = await task(result)
-    return result
+    def __init__(
+        self,
+        func: F,
+        name: str | None = None,
+        fallback: Callable | None = None,
+        rollback: Callable | None = None,
+        retry_max_attempts: int = 0,
+        retry_delay: int = 1,
+        retry_backoff: int = 2,
+        timeout: int = 0,
+        secret_requests: list[str] = [],
+        output_storage: OutputStorage | None = None,
+        cache: bool = False,
+        metadata: bool = False,
+        priority: int = 10,
+        deadline: Optional[datetime] = None,
+        resource_requirements: Optional[Dict[str, Any]] = None,
+        schedule: Optional[str] = None,
+        event_trigger: Optional[Dict[str, str]] = None
+    ):
+        self._func = func
+        self.name = name if name else func.__name__
+        self.fallback = fallback
+        self.rollback = rollback
+        self.retry_max_attempts = retry_max_attempts
+        self.retry_delay = retry_delay
+        self.retry_backoff = retry_backoff
+        self.timeout = timeout
+        self.secret_requests = secret_requests
+        self.output_storage = output_storage
+        self.cache = cache
+        self.metadata = metadata
+        self.priority = priority
+        self.deadline = deadline
+        self.resource_requirements = resource_requirements
+        self.schedule = schedule
+        self.event_trigger = event_trigger
+        wraps(func)(self)
 
-@decorators.task.with_options(metadata=True)
-async def pause(name: str, metadata: decorators.TaskMetadata):
-    ctx = await WorkflowExecutionContext.get()
-    if ctx.resumed:
-        ctx.events.append(
-            ExecutionEvent(
-                type=ExecutionEventType.TASK_RESUMED,
-                source_id=metadata.task_id,
-                name=metadata.task_name,
-                value=name,
-            ),
-        )
-        return
-    raise PauseRequested(name=name)
+    def __get__(self, instance, owner):
+        return lambda *args, **kwargs: self(*(args if instance is None else (instance,) + args), **kwargs)
 
-async def default_action(arg: Any) -> Any:
-    return arg
+    async def __call__(self, *args, **kwargs) -> Any:
+        task_args = get_func_args(self._func, args)
+        full_name = self.name.format(**task_args)
+        task_id = f"{full_name}_{abs(hash((full_name, make_hashable(task_args), make_hashable(kwargs))))}"
+        ctx = await WorkflowExecutionContext.get()
+        finished = [e for e in ctx.events if e.source_id == task_id and e.type in (ExecutionEventType.TASK_COMPLETED, ExecutionEventType.TASK_FAILED)]
+        if len(finished) > 0:
+            return finished[0].value
+        if not ctx.resumed:
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_STARTED, source_id=task_id, name=full_name, value=task_args))
+        try:
+            output = None
+            if self.cache:
+                output = CacheManager.get(task_id)
+            if not output:
+                scheduler = Scheduler()
+                task_info = TaskInfo(
+                    task_id=task_id,
+                    task=self._func,
+                    args=args,
+                    kwargs=kwargs,
+                    priority=self.priority,
+                    deadline=self.deadline,
+                    resource_requirements=self.resource_requirements,
+                    schedule=self.schedule,
+                    event_trigger=self.event_trigger
+                )
+                if self.event_trigger and self.event_trigger.get("type") in ["kubernetes", "airflow"]:
+                    scheduler.register_kubernetes_trigger(task_info, self.event_trigger) if self.event_trigger["type"] == "kubernetes" else scheduler.register_airflow_trigger(task_info, self.event_trigger)
+                else:
+                    await scheduler.schedule_task(task_info)
+                if not self.schedule and not (self.event_trigger and self.event_trigger.get("type") in ["http", "kubernetes", "airflow"]):
+                    task_info = await scheduler.get_next_task()
+                    if not task_info:
+                        raise ExecutionError("No task available for execution")
+                    executor = get_executor()
+                    try:
+                        if self.secret_requests:
+                            secrets = SecretManager.current().get(self.secret_requests)
+                            kwargs = {**kwargs, "secrets": secrets}
+                        if self.metadata:
+                            kwargs = {**kwargs, "metadata": TaskMetadata(task_id, full_name)}
+                        if self.timeout > 0:
+                            output = await asyncio.wait_for(
+                                executor.execute(self._func, *args, **kwargs),
+                                timeout=self.timeout
+                            )
+                        else:
+                            output = await executor.execute(self._func, *args, **kwargs)
+                        if self.cache:
+                            CacheManager.set(task_id, output)
+                    finally:
+                        executor.shutdown()
+                        scheduler.release_resources(self.resource_requirements or {})
+                else:
+                    output = None
+        except Exception as ex:
+            output = await self.__handle_exception(ctx, ex, task_id, full_name, task_args, args, kwargs)
+        if output is not None:
+            ctx.events.append(
+                ExecutionEvent(
+                    type=ExecutionEventType.TASK_COMPLETED,
+                    source_id=task_id,
+                    name=full_name,
+                    value=self.output_storage.store(task_id, output) if self.output_storage else output,
+                )
+            )
+        ContextManager.default().save(ctx)
+        return output
 
-class Graph:
-    # ... (unchanged, included for completeness)
-    @dataclass
-    class Node:
-        name: str
-        upstream: dict[str, Callable[..., Awaitable[Any]]] = field(default_factory=dict)
-        state: Literal["pending", "completed"] = "pending"
-        action: Callable[..., Awaitable[Any]] = field(default=lambda _: default_action(True))
-        output: Any = None
+    async def map(self, args):
+        return await asyncio.gather(*(self(arg) for arg in args))
 
-        def __hash__(self):
-            return hash(self.name)
+    async def __handle_exception(self, ctx: WorkflowExecutionContext, ex: Exception, task_id: str, task_full_name: str, task_args: dict, args: tuple, kwargs: dict, retry_attempts: int = 0):
+        if isinstance(ex, PauseRequested):
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_PAUSED, source_id=task_id, name=task_full_name, value=ex.name))
+            ContextManager.default().save(ctx)
+            raise ex
+        try:
+            if self.retry_max_attempts > 0 and retry_attempts < self.retry_max_attempts:
+                return await self.__handle_retry(ctx, task_id, task_full_name, args, kwargs)
+            elif self.fallback:
+                return await self.__handle_fallback(ctx, task_id, task_full_name, task_args, args, kwargs)
+            else:
+                await self.__handle_rollback(ctx, task_id, task_full_name, task_args, args, kwargs)
+                ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_FAILED, source_id=task_id, name=task_full_name, value=ex))
+                if isinstance(ex, ExecutionError):
+                    raise ex
+                raise ExecutionError(ex)
+        except RetryError as ex:
+            output = await self.__handle_exception(ctx, ex, task_id, task_full_name, task_args, args, kwargs, retry_attempts=ex.retry_attempts)
+            return output
 
-    START = Node(name="START", action=default_action)
-    END = Node(name="END", action=default_action)
+    async def __handle_fallback(self, ctx: WorkflowExecutionContext, task_id: str, task_full_name: str, task_args: dict, args: tuple, kwargs: dict):
+        if self.fallback:
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_FALLBACK_STARTED, source_id=task_id, name=task_full_name, value=task_args))
+            try:
+                output = await maybe_awaitable(self.fallback(*args, **kwargs))
+                ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_FALLBACK_COMPLETED, source_id=task_id, name=task_full_name, value=self.output_storage.store(task_id, output) if self.output_storage else output))
+            except Exception as ex:
+                ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_FALLBACK_FAILED, source_id=task_id, name=task_full_name, value=ex))
+                if isinstance(ex, ExecutionError):
+                    raise ex
+                raise ExecutionError(ex)
+            return output
 
-    def __init__(self, name: str):
-        self._name = name
-        self._nodes: dict[str, Graph.Node] = {"START": Graph.START, "END": Graph.END}
+    async def __handle_rollback(self, ctx: WorkflowExecutionContext, task_id: str, task_full_name: str, task_args: dict, args: tuple, kwargs: dict):
+        if self.rollback:
+            ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_ROLLBACK_STARTED, source_id=task_id, name=task_full_name, value=task_args))
+            try:
+                output = await maybe_awaitable(self.rollback(*args, **kwargs))
+                ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_ROLLBACK_COMPLETED, source_id=task_id, name=task_full_name, value=self.output_storage.store(task_id, output) if self.output_storage else output))
+                return output
+            except Exception as ex:
+                ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_ROLLBACK_FAILED, source_id=task_id, name=task_full_name, value=ex))
+                raise ex
 
-    def start_with(self, node: str) -> Graph:
-        self.add_edge(Graph.START.name, node)
-        return self
-
-    def end_with(self, node: str) -> Graph:
-        self.add_edge(node, Graph.END.name)
-        return self
-
-    def add_node(self, name: str, action: Callable[..., Any]) -> Graph:
-        if name in self._nodes:
-            raise ValueError(f"Node {name} already present.")
-        self._nodes[name] = Graph.Node(name=name, action=action)
-        return self
-
-    def add_edge(self, start_node: str, end_node: str, condition: Callable[..., Awaitable[bool]] = lambda _: default_action(True)) -> Graph:
-        if start_node not in self._nodes:
-            raise ValueError(f"Node {start_node} must be present.")
-        if end_node not in self._nodes:
-            raise ValueError(f"Node {end_node} must be present.")
-        if end_node == Graph.START.name:
-            raise ValueError("START cannot be an end_node")
-        if start_node == Graph.END.name:
-            raise ValueError("END cannot be an start_node")
-        self._nodes[end_node].upstream[start_node] = condition
-        return self
-
-    def validate(self) -> Graph:
-        has_start = any(Graph.START.name in node.upstream for node in self._nodes.values())
-        if not has_start:
-            raise ValueError("Graph must have a starting node.")
-        has_end = self._nodes[Graph.END.name].upstream
-        if not has_end:
-            raise ValueError("Graph must have a ending node.")
-        def dfs(node_name: str, visited: set):
-            if node_name in visited:
-                return
-            visited.add(node_name)
-            for neighbor_name, node in self._nodes.items():
-                if node_name in node.upstream:
-                    dfs(neighbor_name, visited)
-        visited: set = set()
-        dfs(Graph.START.name, visited)
-        if len(visited) != len(self._nodes):
-            raise ValueError("Not all nodes are connected.")
-        return self
-
-    @decorators.task.with_options(name="graph_{self._name}")
-    async def __call__(self, input: Any | None = None):
-        self.validate()
-        await self.__execute_node(Graph.START.name, input)
-        return self._nodes[Graph.END.name].output
-
-    async def __execute_node(self, name: str, input: Any | None = None):
-        node = self._nodes[name]
-        if self.__can_execute(node):
-            upstream_outputs = ([input] if name == Graph.START.name else [up.output for up in self.__get_upstream(node)])
-            node.output = await node.action(*upstream_outputs)
-            node.state = "completed"
-            for dnode in self.__get_downstream(node):
-                await self.__execute_node(dnode.name)
-
-    async def __can_execute(self, node: Graph.Node) -> bool:
-        for name, ok_to_proceed in node.upstream.items():
-            upstream = self._nodes[name]
-            if (upstream.state == "pending" or not await ok_to_proceed(upstream.output) or not await self.__can_execute(upstream)):
-                return False
-        return True
-
-    def __get_upstream(self, node):
-        return [self._nodes[name] for name in node.upstream]
-
-    def __get_downstream(self, node: Graph.Node):
-        return [dnode for dnode in self._nodes.values() if node.name in dnode.upstream]
+    async def __handle_retry(self, ctx: WorkflowExecutionContext, task_id: str, task_full_name: str, args: tuple, kwargs: dict):
+        attempt = 0
+        while attempt < self.retry_max_attempts:
+            attempt += 1
+            current_delay = self.retry_delay
+            retry_args = {"current_attempt": attempt, "max_attempts": self.retry_max_attempts, "current_delay": current_delay, "backoff": self.retry_backoff}
+            try:
+                time.sleep(current_delay)
+                current_delay = min(current_delay * self.retry_backoff, 600)
+                ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_RETRY_STARTED, source_id=task_id, name=task_full_name, value=retry_args))
+                executor = get_executor()
+                try:
+                    output = await executor.execute(self._func, *args, **kwargs)
+                    ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_RETRY_COMPLETED, source_id=task_id, name=task_full_name, value={"current_attempt": attempt, "max_attempts": self.retry_max_attempts, "current_delay": current_delay, "backoff": self.retry_backoff, "output": self.output_storage.store(task_id, output) if self.output_storage else output}))
+                    return output
+                finally:
+                    executor.shutdown()
+            except Exception as ex:
+                ctx.events.append(ExecutionEvent(type=ExecutionEventType.TASK_RETRY_FAILED, source_id=task_id, name=task_full_name, value={"current_attempt": attempt, "max_attempts": self.retry_max_attempts, "current_delay": current_delay, "backoff": self.retry_backoff}))
+                if attempt == self.retry_max_attempts:
+                    raise RetryError(ex, self.retry_max_attempts, self.retry_delay, self.retry_backoff)
