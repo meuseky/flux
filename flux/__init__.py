@@ -12,8 +12,14 @@ from flux.output_storage import *
 from flux.secret_managers import *
 from flux.tasks import *
 
+from flux.cache_backends import *
+
 __all__ = [
     "task",
     "workflow",
     "WorkflowExecutionContext",
+    "CacheBackend",
+    "FileCacheBackend",
+    "RedisCacheBackend",
+    "MemcachedCacheBackend",
 ]

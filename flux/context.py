@@ -8,6 +8,8 @@ from typing import Generic
 from typing import TypeVar
 from uuid import uuid4
 
+from flux import ContextManager, Configuration
+from flux.cache import CacheManager
 from flux.errors import ExecutionError
 from flux.events import ExecutionEvent
 from flux.events import ExecutionEventType
@@ -18,17 +20,42 @@ CURRENT_CONTEXT: ContextVar = ContextVar("current_context", default=None)
 
 
 class WorkflowExecutionContext(Generic[WorkflowInputType]):
-    def __init__(
-        self,
-        name: str,
-        input: WorkflowInputType | None = None,
-        execution_id: str | None = None,
-        events: list[ExecutionEvent] | None = None,
-    ):
+    def __init__(self, name: str, input: WorkflowInputType | None = None, execution_id: str | None = None):
         self._name = name
         self._input = input
-        self._execution_id = execution_id if execution_id else uuid4().hex
-        self._events = list(events) if events else []
+        self._execution_id = execution_id or uuid4().hex
+        self._events: list[ExecutionEvent] = []
+        self._progress: float = 0.0  # Track progress (0.0 to 1.0)
+
+    def update_progress(self, progress: float):
+        """Update execution progress (0.0 to 1.0)."""
+        self._progress = max(0.0, min(1.0, progress))
+        self.events.append(ExecutionEvent(
+            type=ExecutionEventType.WORKFLOW_PROGRESS,
+            source_id=self._execution_id,
+            name=self._name,
+            value={"progress": self._progress},
+        ))
+
+    def save_checkpoint(self, state: Any):
+        """Save intermediate state for resuming."""
+        self.events.append(ExecutionEvent(
+            type=ExecutionEventType.WORKFLOW_CHECKPOINT,
+            source_id=self._execution_id,
+            name=self._name,
+            value=state,
+        ))
+        cache_manager = CacheManager.default()
+        cache_manager.set(f"checkpoint_{self._execution_id}", self, ttl=Configuration.get().settings.cache.default_ttl)
+        ContextManager.default().save(self)
+
+    @staticmethod
+    async def resume(execution_id: str) -> WorkflowExecutionContext:
+        cache_manager = CacheManager.default()
+        ctx = cache_manager.get(f"checkpoint_{execution_id}")
+        if ctx:
+            return ctx
+        return ContextManager.default().get(execution_id)
 
     @staticmethod
     async def get() -> WorkflowExecutionContext:

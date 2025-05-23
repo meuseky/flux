@@ -5,11 +5,14 @@ from abc import abstractmethod
 
 from sqlalchemy.exc import IntegrityError
 
+from flux import Configuration
+from flux.cache import CacheManager
 from flux.context import WorkflowExecutionContext
 from flux.errors import ExecutionContextNotFoundError
 from flux.models import ExecutionEventModel
 from flux.models import SQLiteRepository
 from flux.models import WorkflowExecutionContextModel
+from flux.monitoring import Monitoring
 
 
 class ContextManager(ABC):
@@ -27,31 +30,31 @@ class ContextManager(ABC):
 
 
 class SQLiteContextManager(ContextManager, SQLiteRepository):
-    def __init__(self):
-        super().__init__()
-
     def save(self, ctx: WorkflowExecutionContext):
         with self.session() as session:
             try:
-                context = session.get(
-                    WorkflowExecutionContextModel,
-                    ctx.execution_id,
-                )
+                context = session.get(WorkflowExecutionContextModel, ctx.execution_id)
                 if context:
                     context.output = ctx.output
-                    additional_events = self._get_additional_events(
-                        ctx,
-                        context,
-                    )
-                    context.events.extend(additional_events)
+                    additional_events = self._get_additional_events(ctx, context)
+                    session.bulk_save_objects(additional_events)  # Bulk insert events
                 else:
                     session.add(WorkflowExecutionContextModel.from_plain(ctx))
                 session.commit()
-            except IntegrityError:  # pragma: no cover
+                cache_manager = CacheManager.default()
+                cache_manager.set(f"context_{ctx.execution_id}", ctx,
+                                  ttl=Configuration.get().settings.cache.default_ttl, tags={f"workflow:{ctx.name}"})
+                Monitoring.default().track_execution(ctx)
+            except IntegrityError:
                 session.rollback()
                 raise
 
     def get(self, execution_id: str | None) -> WorkflowExecutionContext:
+        # Check cache first
+        cache_manager = CacheManager.default()
+        ctx = cache_manager.get(f"context_{execution_id}")
+        if ctx:
+            return ctx
         with self.session() as session:
             context = session.get(WorkflowExecutionContextModel, execution_id)
             if context:

@@ -9,7 +9,7 @@ from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
-from sqlalchemy import Column
+from sqlalchemy import Column, Index
 from sqlalchemy import create_engine
 from sqlalchemy import DateTime
 from sqlalchemy import Enum as SqlEnum
@@ -18,6 +18,7 @@ from sqlalchemy import Integer
 from sqlalchemy import PickleType
 from sqlalchemy import String
 from sqlalchemy import TypeDecorator
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Session
@@ -33,13 +34,23 @@ class Base(DeclarativeBase):
     pass
 
 
-class SQLiteRepository:
-    def __init__(self):
-        self._engine = create_engine(Configuration.get().settings.database_url)
+class BaseRepository:
+    def __init__(self, database_url: str):
+        self._engine = create_engine(database_url)
         Base.metadata.create_all(self._engine)
 
     def session(self) -> Session:
         return Session(self._engine)
+
+
+class SQLiteRepository(BaseRepository):
+    def __init__(self):
+        super().__init__(Configuration.get().settings.database_url)
+
+
+class PostgreSQLRepository(BaseRepository):
+    def __init__(self):
+        super().__init__(Configuration.get().settings.database_url.replace("sqlite:///", "postgresql://"))
 
 
 class EncryptedType(TypeDecorator):
@@ -126,6 +137,10 @@ class WorkflowModel(Base):
     version = Column(Integer, nullable=False)
     code = Column(PickleType(pickler=dill), nullable=False)
 
+    __table_args__ = (
+        Index('ix_workflow_name_version', 'name', 'version'),
+    )
+
     def __init__(self, name: str, code: decorators.workflow, version: int = 1):
         self.name = name
         self.code = code
@@ -134,16 +149,18 @@ class WorkflowModel(Base):
 
 class WorkflowExecutionContextModel(Base):
     __tablename__ = "workflow_executions"
-
-    execution_id = Column(
-        String,
-        primary_key=True,
-        unique=True,
-        nullable=False,
-    )
+    execution_id = Column(String, primary_key=True, unique=True, nullable=False)
     name = Column(String, nullable=False)
-    input = Column(PickleType(pickler=dill), nullable=True)
-    output = Column(PickleType(pickler=dill), nullable=True)
+    input = Column(JSONB if Configuration.get().settings.database_type == "postgresql" else PickleType(pickler=dill),
+                   nullable=True)
+    output = Column(JSONB if Configuration.get().settings.database_type == "postgresql" else PickleType(pickler=dill),
+                    nullable=True)
+    events = relationship("ExecutionEventModel", back_populates="execution", cascade="all, delete-orphan",
+                          lazy='dynamic')
+
+    __table_args__ = (
+        Index('ix_execution_id', 'execution_id'),
+    )
 
     # Relationship to events
     events = relationship(

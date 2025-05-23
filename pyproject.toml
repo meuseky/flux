@@ -2,43 +2,66 @@
 name = "flux-core"
 version = "0.2.3"
 description = "Flux is a distributed workflow orchestration engine to build stateful and fault-tolerant workflows."
-authors = ["Eduardo Dias <edurdias@gmail.com>"]
+authors = ["Flux Contributors <flux-community@example.com>"]
+license = "Apache-2.0"
 repository = "https://github.com/edurdias/flux"
 homepage = "https://github.com/edurdias/flux"
+documentation = "https://edurdias.github.io/flux"
 readme = "README.md"
+keywords = ["workflow", "orchestration", "distributed", "serverless", "stateful", "python"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Operating System :: OS Independent",
+]
 
 packages = [{ include = "flux" }]
+include = ["LICENSE", "NOTICE", "docs/**"]
+
+[tool.poetry.urls]
+"Bug Tracker" = "https://github.com/edurdias/flux/issues"
+"Documentation" = "https://edurdias.github.io/flux"
 
 [tool.poetry.dependencies]
 python = "^3.12"
-pydantic = "^2.9.2"
-sqlalchemy = "^2.0.35"
-fastapi = "^0.115.2"
-uvicorn = "^0.31.1"
-pycryptodome = "^3.21.0"
-tomli = "^2.0.2"
-pydantic-settings = "^2.6.1"
+apscheduler = "^3.11.0"
+boto3 = "^1.38.0"
 dill = "^0.3.9"
+fastapi = "^0.115.0"
 h11 = "^0.16.0"
+google-cloud-functions = "^1.20.0"
+orjson = "^3.10.0"
+pika = "^1.3.2"
+prometheus-client = "^0.22.0"
+pycryptodome = "^3.21.0"
+pydantic = "^2.9.0"
+pydantic-settings = "^2.6.0"
+pymemcache = "^4.0.0"
+redis = "^5.1.0"  # Updated to latest as of May 2025
+sqlalchemy = "^2.0.0"
+tomli = "^2.0.2"
+uvicorn = "^0.31.0"
+watchdog = "^5.0.0"  # For file triggers in scheduler.py
+requests = "^2.32.0"  # For CI/CD triggers in scheduler.py
 
 [tool.poetry.group.dev.dependencies]
-httpx = "^0.27.2"
-pandas = "^2.2.3"
-numpy = "^2.1.1"
+httpx = "^0.27.0"
 pyright = "^1.1.384"
-pylint = "^3.3.1"
+pylint = "^3.3.0"
 bandit = "^1.7.10"
 pyflakes = "^3.2.0"
 radon = "^6.0.1"
 prospector = "^1.12.0"
-pytest = "^8.3.3"
+pytest = "^8.4.0"  # Latest as of May 2025
 pytest-mock = "^3.14.0"
 pytest-cov = "^5.0.0"
-pre-commit = "^4.0.1"
+pre-commit = "^4.0.0"
 mkdocs = "^1.6.1"
 mkdocs-material = "^9.5.43"
 mkdocs-material-extensions = "^1.3.1"
-mkdocstrings = "^0.26.2"
+mkdocstrings = { version = "^0.26.2", extras = ["python"] }
+mike = "^2.1.0"  # For documentation versioning
 ipykernel = "^6.29.5"
 poethepoet = "^0.34.0"
 
@@ -46,13 +69,13 @@ poethepoet = "^0.34.0"
 flux = "flux.flux:cli"
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=flux --cov-report=term-missing --cov-report=xml"
 filterwarnings = ["ignore::pytest.PytestReturnNotNoneWarning"]
 
-# Custom commands for workflow management
 [tool.poe.tasks]
-test-workflows = { script = "scripts.ci:test_workflows" }
+test-workflows = { script = "scripts.ci:test_workflows", help = "Run all workflow tests" }
 
-# Individual workflow tests
 [tool.poe.tasks.test-pr]
 help = "Test the PR workflow locally"
 script = "scripts.ci:test_workflow"
@@ -79,12 +102,14 @@ script = "scripts.ci:test_workflow"
 args = [
     { name = "workflow", default = "docs.yml", positional = true },
     { name = "job", default = "deploy", positional = true },
-    { name = "event", default = "paths", positional = true },
+    { name = "event", default = "push", positional = true },
     { name = "dryrun", default = false, type = "boolean", options = ["--dryrun"] }
 ]
 
 [tool.ruff]
 line-length = 100
+select = ["E", "F", "W", "I", "N", "D", "UP", "S", "B", "A", "C4", "T20", "Q", "RUF"]
+ignore = ["D203", "D213"]  # Ignore conflicting docstring rules
 
 [tool.ruff.format]
 quote-style = "double"

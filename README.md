@@ -1,67 +1,52 @@
-# Flux
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Flux Logo" width="200"/>
+</p>
 
-Flux is a distributed workflow orchestration engine written in Python that enables building stateful and fault-tolerant workflows. It provides an intuitive programming model for creating complex, reliable distributed applications with built-in support for state management, error handling, and execution control.
+<h1 align="center">Flux</h1>
+
+<p align="center">
+  A distributed workflow orchestration engine for building stateful, fault-tolerant workflows.
+</p>
+
+<p align="center">
+  <a href="https://github.com/edurdias/flux/actions/workflows/pre-commit.yml">
+    <img src="https://github.com/edurdias/flux/actions/workflows/pre-commit.yml/badge.svg" alt="CI Status"/>
+  </a>
+  <a href="https://pypi.org/project/flux-core/">
+    <img src="https://img.shields.io/pypi/v/flux-core.svg" alt="PyPI Version"/>
+  </a>
+  <a href="https://github.com/edurdias/flux/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0 License"/>
+  </a>
+</p>
+
+Flux is a community-driven, open-source Python framework for creating reliable, distributed workflows. It offers stateful execution, robust error handling, and flexible deployment options (local, distributed, serverless), making it ideal for data pipelines, CI/CD, and enterprise applications.
 
 ## Key Features
 
-### Core Capabilities
-- **Stateful Execution**: Full persistence of workflow state and execution history
-- **Distributed Architecture**: Support for both local and distributed execution modes
-- **High Performance**: Efficient parallel task execution and workflow processing
-- **Type Safety**: Leverages Python type hints for safer workflow development
-- **API Integration**: Built-in FastAPI server for HTTP-based workflow execution
-
-### Task Management
-- **Flexible Task Configuration**:
-  ```python
-  @task.with_options(
-      retry_max_attempts=3,        # Auto-retry failed tasks
-      retry_delay=1,              # Initial delay between retries
-      retry_backoff=2,            # Exponential backoff for retries
-      timeout=30,                 # Task execution timeout
-      fallback=fallback_func,     # Fallback handler for failures
-      rollback=rollback_func,     # Rollback handler for cleanup
-      secret_requests=['API_KEY'] # Secure secrets management
-  )
-  ```
-
-### Workflow Patterns
-- **Task Parallelization**: Execute multiple tasks concurrently
-- **Pipeline Processing**: Chain tasks in sequential processing pipelines
-- **Subworkflows**: Compose complex workflows from simpler ones
-- **Task Mapping**: Apply tasks across collections of inputs
-- **Graph-based Workflows**: Define workflows as directed acyclic graphs (DAGs)
-- **Dynamic Workflows**: Modify workflow behavior based on runtime conditions
-
-### Error Handling & Recovery
-- **Automatic Retries**: Configurable retry policies with backoff
-- **Fallback Mechanisms**: Define alternative execution paths
-- **Rollback Support**: Clean up after failures
-- **Exception Handling**: Comprehensive error management
-- **Timeout Management**: Prevent hung tasks and workflows
-
-### State Management
-- **Execution Persistence**: Durable storage of workflow state
-- **Pause & Resume**: Control workflow execution flow
-- **Deterministic Replay**: Automatic replay of workflow events to maintain consistency
-- **State Inspection**: Monitor workflow progress and state
+- **Stateful Workflows**: Persist execution state and history with `WorkflowExecutionContext`.
+- **Distributed Execution**: Run workflows locally, on Kubernetes, or serverless (AWS Lambda, Google Cloud Functions).
+- **High Performance**: Leverage caching (`CacheManager`), parallel tasks, and RabbitMQ for scalability.
+- **Type Safety**: Use Python type hints for safer development, validated by MyPy.
+- **API-Driven**: Execute workflows via a FastAPI server with HTTP endpoints.
+- **Flexible Patterns**: Support pipelines, parallel tasks, subworkflows, and DAGs.
+- **Error Handling**: Automatic retries, fallbacks, rollbacks, and timeouts.
+- **Plugins**: Extend functionality with Kubernetes, S3, and serverless plugins.
 
 ## Installation
-
+Install Flux using pip:
 ```bash
 pip install flux-core
 ```
-
-**Requirements**:
-- Python 3.12 or later
-- Dependencies are managed through Poetry
+Or use Docker:
+```bash
+docker pull flux:latest
+docker run -p 8000:8000 flux:latest
+```
+Requirements: Python 3.12+, Poetry for dependency management.
 
 ## Quick Start
-
-### 1. Basic Workflow
-
-Create a simple workflow that processes input:
-
+Create and run a simple workflow:
 ```python
 from flux import task, workflow, WorkflowExecutionContext
 
@@ -71,153 +56,75 @@ def say_hello(name: str) -> str:
 
 @workflow
 def hello_world(ctx: WorkflowExecutionContext[str]):
-    return (yield say_hello(ctx.input))
+    return say_hello(ctx.input)
 
 # Execute locally
 result = hello_world.run("World")
-print(result.output)  # "Hello, World"
+print(result.output)  # Outputs: Hello, World
 ```
+Explore more examples in the documentation.
 
-### 2. Parallel Task Execution
-
-Execute multiple tasks concurrently:
-
-```python
-from flux import task, workflow
-from flux.tasks import parallel
-
-@workflow
-def parallel_workflow(ctx: WorkflowExecutionContext[str]):
-    results = yield parallel(
-        task1(ctx.input),
-        task2(ctx.input),
-        task3(ctx.input)
-    )
-    return results
+## Configuration
+Customize Flux with flux.toml:
+```toml
+[flux]
+database_url = "postgresql://user:pass@db:5432/flux"
+cache.backend = "redis"
+executor.execution_mode = "distributed"
 ```
+See Configuration for details.
 
-### 3. Pipeline Processing
-
-Chain tasks in a processing pipeline:
-
-```python
-from flux.tasks import pipeline
-
-@workflow
-def pipeline_workflow(ctx: WorkflowExecutionContext[int]):
-    result = yield pipeline(
-        multiply_by_two,
-        add_three,
-        square,
-        input=ctx.input
-    )
-    return result
-```
-
-### 4. Task Mapping
-
-Apply a task across multiple inputs:
-
-```python
-@workflow
-def map_workflow(ctx: WorkflowExecutionContext[list[str]]):
-    results = yield process_item.map(ctx.input)
-    return results
-```
-
-## Advanced Usage
-
-### Workflow Control
-#### State Management
-```python
-# Resume existing workflow execution
-ctx = workflow.run(execution_id="previous_execution_id")
-
-# Check workflow state
-print(f"Finished: {ctx.finished}")
-print(f"Succeeded: {ctx.succeeded}")
-print(f"Failed: {ctx.failed}")
-
-# Inspect workflow events
-for event in ctx.events:
-    print(f"{event.type}: {event.value}")
-```
-
-### Error Handling
-
-```python
-@task.with_options(
-    retry_max_attempts=3,
-    retry_delay=1,
-    retry_backoff=2,
-    fallback=lambda: "fallback result",
-    rollback=cleanup_function
-)
-def risky_task():
-    # Task implementation with comprehensive error handling
-    pass
-```
-
-### Secret Management
-
-```python
-@task.with_options(secret_requests=["API_KEY"])
-def secure_task(secrets: dict[str, Any] = {}):
-    api_key = secrets["API_KEY"]
-    # Use API key securely
-```
-
-## API Server
-
-Start the API server for HTTP-based workflow execution:
-
+## Deployment
+Deploy Flux with Docker, Kubernetes, or serverless platforms:
 ```bash
-flux start myworkflows
+# Docker Compose with Redis and PostgreSQL
+docker-compose -f docker-compose.yml up
 ```
-
-Execute workflows via HTTP:
-```bash
-curl -X POST 'http://localhost:8000/workflow_name' \
-     -H 'Content-Type: application/json' \
-     -d '"input_data"'
-```
+See Deployment for Docker, Kubernetes, and serverless guides.
 
 ## Development
-
-### Setup Development Environment
+### Setup
 ```bash
 git clone https://github.com/edurdias/flux
 cd flux
 poetry install
 ```
-
 ### Run Tests
 ```bash
 poetry run pytest
 ```
-
 ### Code Quality
-The project uses several tools for code quality:
-- Ruff for linting and formatting
-- MyPy for type checking
-- Pytest for testing
-- Pre-commit hooks for code quality checks
+Flux uses:
+- Ruff: Linting and formatting
+- MyPy: Type checking
+- Pytest: Testing
+- Pre-commit: Code quality hooks
 
-## License
-
-Apache License 2.0 - See LICENSE file for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests. For major changes, please open an issue first to discuss what you would like to change.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
+Run checks:
+```bash
+pre-commit run --all-files 
+```
 
 ## Documentation
+Full documentation is available at https://edurdias.github.io/flux. Explore installation, core concepts, advanced features, and deployment options.
 
-For a more details, please check our [documentation](https://edurdias.github.io/flux/).
+## License
+Flux is licensed under the Apache License 2.0, maintained by Flux Contributors. See the LICENSE and NOTICE files for details and third-party attributions.
+
+## Security
+For security vulnerabilities, please follow our [Security Policy](SECURITY.md).
+
+## Contributing
+Join our community! Open issues or submit pull requests using our [templates](https://github.com/edurdias/flux/tree/main/.github/ISSUE_TEMPLATE).
+
+## Changelog
+See [CHANGELOG.md](CHANGELOG.md) for a history of changes and updates.
+
+## Community Standards
+We are committed to fostering an inclusive community. Please read our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Join the Community
+- GitHub: edurdias/flux
+- Discussions: Join our GitHub Discussions
+
+Built with ❤️‍🔥 by Flux Contributors

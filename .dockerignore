@@ -1,0 +1,9 @@
+.git/
+tests/
+docs/
+.flux/
+.data/
+.cache/
+*.log
+dump.rdb
+*.pid

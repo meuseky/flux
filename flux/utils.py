@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import traceback
 import uuid
 from datetime import datetime
 from datetime import timedelta
@@ -145,7 +146,7 @@ class FluxEncoder(json.JSONEncoder):
             return {"type": type(obj).__name__, "message": str(obj)}
 
         if isinstance(obj, Exception):
-            return {"type": type(obj).__name__, "message": str(obj)}
+            return {"type": type(obj).__name__, "message": str(obj), "stacktrace": traceback.format_exc()}
 
         if inspect.isclass(type(obj)) and isinstance(obj, Callable):
             return type(obj).__name__
@@ -165,4 +166,4 @@ class FluxEncoder(json.JSONEncoder):
         if hasattr(obj, "__dict__"):
             return obj.__dict__
 
-        return str(obj)
+        return super().default(obj)

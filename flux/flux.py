@@ -8,9 +8,11 @@ import click
 import uvicorn
 
 import flux.decorators as decorators
+from flux import ContextManager, CacheManager
 from flux.api import create_app
 from flux.catalogs import WorkflowCatalog
 from flux.config import Configuration
+from flux.plugins import plugin, PluginManager
 from flux.utils import import_module_from_file
 from flux.utils import parse_value
 from flux.utils import to_json
@@ -24,6 +26,10 @@ def cli():
 @cli.group()
 def workflow():
     pass
+
+
+# Add plugin CLI group
+cli.add_command(plugin)
 
 
 @workflow.command("list")
@@ -158,6 +164,33 @@ def run_workflow(
 def start(path: str, host: str | None = None, port: int | None = None):
     """Start the server to execute Workflows via API."""
     settings = Configuration.get().settings
+    uvicorn.run(
+        create_app(path),
+        port=port or settings.server_port,
+        host=host or settings.server_host,
+    )
+
+
+@workflow.command("debug")
+@click.argument("execution_id")
+def debug_workflow(execution_id: str):
+    try:
+        ctx = ContextManager.default().get(execution_id)
+        click.echo(to_json(ctx.to_dict()))
+    except Exception as ex:
+        click.echo(f"Error debugging workflow: {str(ex)}", err=True)
+
+
+@cli.command()
+@click.argument("path")
+@click.option("--host", "-h", default=None, help="Host to bind the server to.")
+@click.option("--port", "-p", default=None, help="Port to bind the server to.")
+def start(path: str, host: str | None = None, port: int | None = None):
+    PluginManager.default().load_plugins()
+    settings = Configuration.get().settings
+    cache_manager = CacheManager.default()
+    workflows = WorkflowCatalog.create().all()
+    cache_manager.warm_up([f"workflow:{w.name}" for w in workflows])  # Preload workflow metadata
     uvicorn.run(
         create_app(path),
         port=port or settings.server_port,
