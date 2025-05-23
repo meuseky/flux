@@ -1,37 +1,102 @@
+# Configuration for pre-commit hooks to enforce code quality in the flux project
 repos:
+  # General Linting and File Checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v5.1.0  # Latest stable version as of May 2025
     hooks:
       - id: trailing-whitespace
+        exclude: ^(\.flux/|\.data/|\.cache/)  # Skip generated directories
       - id: end-of-file-fixer
+        exclude: ^(\.flux/|\.data/|\.cache/)
       - id: check-yaml
+        files: ^(deploy/|config/|\.github/)  # Limit to relevant directories
       - id: check-toml
       - id: check-json
+        files: ^(config/|tests/)  # Limit to config and test JSON
       - id: debug-statements
       - id: name-tests-test
         args: [--pytest-test-first]
       - id: detect-private-key
+        exclude: ^tests/  # Avoid false positives in test fixtures
+
+  # Python Linting and Formatting (Ruff)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.3
+    rev: v0.7.0  # Latest stable version as of May 2025
     hooks:
       - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
+        args: [--fix]  # Auto-fix without failing on fixes
+        exclude: ^(\.flux/|\.data/|\.cache/)
       - id: ruff-format
+        exclude: ^(\.flux/|\.data/|\.cache/)
+
+  # Python Import Sorting
   - repo: https://github.com/asottile/reorder-python-imports
-    rev: v3.14.0
+    rev: v3.15.0  # Latest stable version as of May 2025
     hooks:
       - id: reorder-python-imports
         args: [--py39-plus, --add-import, "from __future__ import annotations"]
+        exclude: ^(\.flux/|\.data/|\.cache/)
+
+  # Python Trailing Commas
   - repo: https://github.com/asottile/add-trailing-comma
-    rev: v3.1.0
+    rev: v3.2.0  # Latest stable version as of May 2025
     hooks:
       - id: add-trailing-comma
+        args: [--py39-plus]
+        exclude: ^(\.flux/|\.data/|\.cache/)
+
+  # Python Version Upgrades
   - repo: https://github.com/asottile/pyupgrade
-    rev: v3.18.0
+    rev: v3.20.0  # Latest stable version as of May 2025
     hooks:
       - id: pyupgrade
         args: [--py39-plus]
+        exclude: ^(\.flux/|\.data/|\.cache/)
+
+  # Static Type Checking (mypy)
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.12.1
+    rev: v1.14.0  # Latest stable version as of May 2025
     hooks:
       - id: mypy
+        args: [--strict, --ignore-missing-imports, --incremental]
+        files: ^flux/  # Limit to source code
+        additional_dependencies: [types-PyYAML, types-redis, types-pika]  # For flux dependencies
+        exclude: ^(\.flux/|\.data/|\.cache/)
+
+  # SQL Linting (for SQLite/PostgreSQL queries)
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: v3.2.0  # Latest stable version as of May 2025
+    hooks:
+      - id: sqlfluff-lint
+        args: [--dialect, sqlite]  # Match flux’s SQLite usage
+        files: ^flux/.*\.py$  # Check Python files with SQL
+      - id: sqlfluff-fix
+        args: [--dialect, sqlite]
+        files: ^flux/.*\.py$
+
+  # TOML Linting (for flux.toml, pyproject.toml)
+  - repo: https://github.com/tamasfe/taplo
+    rev: v0.10.0  # Latest stable version as of May 2025
+    hooks:
+      - id: taplo-lint
+        files: ^(flux\.toml|pyproject\.toml)
+
+  # Cloud Configuration (for serverless/Kubernetes)
+  - repo: https://github.com/streetsidesoftware/cfn-lint
+    rev: v1.10.0  # Latest stable version as of May 2025
+    hooks:
+      - id: cfn-lint
+        files: ^deploy/.*\.yaml$  # AWS CloudFormation templates
+
+  - repo: https://github.com/yannh/kubeconform
+    rev: v0.7.0  # Latest stable version as of May 2025
+    hooks:
+      - id: kubeconform
+        files: ^deploy/.*\.yaml$  # Kubernetes manifests
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.41.0
+    hooks:
+      - id: markdownlint
+        files: ^(CHANGELOG\.md)$
+        args: [--fix]

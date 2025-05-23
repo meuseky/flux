@@ -1,31 +1,99 @@
+# Flux configuration file for workflow orchestration
+# Environment variables (e.g., FLUX_DATABASE_URL) override these settings
+# See flux/config.py for full schema and defaults
+
 [flux]
-debug = false                            # Enable debug mode for additional logging
-log_level = "INFO"                       # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-server_port = 8000                       # Port for the API server
-server_host = "localhost"                # Host for the API server
-api_url = "http://localhost:8000"        # API URL for remote execution
-home = ".flux"                           # Home directory
-cache_path = ".cache"                    # Cache directory
-local_storage_path = ".data"             # Base path for storing task outputs
-serializer = "pkl"                       # Default serializer (json or pkl)
-database_url = "sqlite:///.flux/flux.db" # Database URL
+debug = false
+# Enable debug mode for verbose logging (true/false)
+log_level = "INFO"
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+server_port = 8000
+# Port for the FastAPI server
+server_host = "0.0.0.0"
+# Host for the FastAPI server (use 0.0.0.0 for Docker/Kubernetes)
+api_url = "http://0.0.0.0:8000"
+# API URL for remote execution
+home = ".flux"
+# Base directory for flux data (override with FLUX_HOME)
+cache_path = ".cache"
+# Cache directory for CacheManager (override with FLUX_CACHE_PATH)
+local_storage_path = ".data"
+# Storage directory for task outputs (override with FLUX_LOCAL_STORAGE_PATH)
+serializer = "pkl"
+# Serializer for data: json, pkl
+database_url = "postgresql://user:pass@db:5432/flux"
+# Database URL (e.g., sqlite:///.flux/flux.db or postgresql://user:pass@host:5432/flux)
+# Override with FLUX_DATABASE_URL for security
+database_type = "postgresql"
+# Database type: sqlite, postgresql
 
 [flux.catalog]
-auto_register = true # Automatically register workflows in the catalog on startup
+auto_register = true
+# Automatically register workflows on startup (true/false)
+options = { module = "flux.workflows" }
+# Workflow discovery options: module (Python module) or path (file path)
+
+[flux.cache]
+backend = "redis"
+# Cache backend: file, redis, memcached
+default_ttl = 3600
+# Default cache TTL in seconds (null for no expiration)
+redis_host = "redis"
+# Redis host (override with FLUX_CACHE_REDIS_HOST)
+redis_port = 6379
+# Redis port
+redis_db = 0
+# Redis database index
+memcached_host = "memcached"
+# Memcached host
+memcached_port = 11211
+# Memcached port
+memory_maxsize = 1000
+# Max items for in-memory LRU cache (used in multi-tier caching)
 
 [flux.executor]
-execution_mode = "local"
-max_workers = 4
+execution_mode = "distributed"
+# Execution mode: local, distributed, aws_lambda, gcp_functions, kubernetes
+max_workers = 8
+# Max worker threads/processes for local/distributed execution
 default_timeout = 0
+# Default task timeout in seconds (0 for no timeout)
 retry_attempts = 3
+# Number of retry attempts for failed tasks
 retry_delay = 1
+# Initial delay between retries in seconds
 retry_backoff = 2
+# Backoff multiplier for retries
 available_cpu = 4
-available_memory = 8  # GB
-available_gpu = 1
+# Available CPU cores
+available_memory = 8
+# Available memory in GB
 default_priority = 10
-distributed_config = { num_workers = 2 }  # Placeholder for queuing system config
-external_scheduler = { type = "none" }  # Options: "kubernetes", "airflow"
+# Default task priority (lower is higher)
+distributed_config = { rabbitmq_host = "rabbitmq", rabbitmq_port = 5672, num_workers = 4 }
+# Distributed execution config for RabbitMQ
+external_scheduler = { type = "kubernetes", namespace = "default" }
+# External scheduler: none, kubernetes, airflow
 
 [flux.security]
-encryption_key = "SUPER_SECRET_KEY" # Master encryption key for sensitive data, this is just an example :P
+encryption_key = ""
+# Master encryption key for sensitive data (override with FLUX_SECURITY_ENCRYPTION_KEY)
+# Example: generate with `openssl rand -base64 32` and store in a secrets manager
+
+[flux.monitoring]
+prometheus_port = 9090
+# Port for Prometheus metrics server
+metrics_enabled = true
+# Enable metrics collection (true/false)
+
+[flux.plugins]
+enabled = ["kubernetes", "s3", "aws_lambda", "gcp_functions"]
+# List of enabled plugins (see flux/plugins/)
+
+[flux.cloud]
+s3_bucket = "flux-bucket"
+# AWS S3 bucket for storage and serverless tasks
+gcp_project = "flux-project"
+# Google Cloud project ID
+gcs_bucket = "flux-tasks"
+# Google Cloud Storage bucket

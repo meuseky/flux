@@ -96,6 +96,10 @@ docker-compose.yml.bak
 .kube/
 .helm/
 
+postgres_data/
+redis_data/
+rabbitmq_data/
+
 # Monitoring and Metrics
 prometheus/
 *.prom
@@ -108,3 +112,5 @@ prometheus/
 # macOS and Windows Artifacts
 .DS_Store
 Thumbs.db
+
+.github/workflows/*.cache
