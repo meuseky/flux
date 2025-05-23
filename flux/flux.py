@@ -8,6 +8,7 @@ import click
 import uvicorn
 
 import flux.decorators as decorators
+from flux import ContextManager
 from flux.api import create_app
 from flux.catalogs import WorkflowCatalog
 from flux.config import Configuration
@@ -163,6 +164,16 @@ def start(path: str, host: str | None = None, port: int | None = None):
         port=port or settings.server_port,
         host=host or settings.server_host,
     )
+
+
+@workflow.command("debug")
+@click.argument("execution_id")
+def debug_workflow(execution_id: str):
+    try:
+        ctx = ContextManager.default().get(execution_id)
+        click.echo(to_json(ctx.to_dict()))
+    except Exception as ex:
+        click.echo(f"Error debugging workflow: {str(ex)}", err=True)
 
 
 if __name__ == "__main__":  # pragma: no cover
