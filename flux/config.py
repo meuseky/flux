@@ -58,6 +58,8 @@ class FluxConfig(BaseSettings):
     catalog: CatalogConfig = Field(default_factory=CatalogConfig)
     storage: dict[str, Any] = Field(default_factory=dict, description="Storage backend configuration")
     plugins: dict[str, Any] = Field(default_factory=dict, description="Plugin configuration")
+    monitoring: dict[str, Any] = Field(default_factory=dict, description="Monitoring configuration")
+    cloud: dict[str, Any] = Field(default_factory=dict, description="Cloud service configuration")
 
     @field_validator("serializer")
     def validate_serializer(cls, v: str) -> str:

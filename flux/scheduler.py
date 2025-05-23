@@ -5,13 +5,19 @@ from typing import Any, Callable, Dict, List, Optional
 import asyncio
 import heapq
 import logging
+
+import requests
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+
+from flux import Monitoring
 from flux.config import Configuration
 from flux.context import WorkflowExecutionContext
 from flux.events import ExecutionEvent, ExecutionEventType
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
+
+from flux.events_pubsub import PubSubTrigger
 
 logger = logging.getLogger("flux.scheduler")
 
@@ -56,12 +62,18 @@ class ResourceManager:
         self.allocated["cpu"] += requirements.get("cpu", 0)
         self.allocated["memory"] += requirements.get("memory", 0) * 1024
         self.allocated["gpu"] += requirements.get("gpu", 0)
+        Monitoring.default().update_resource_usage("cpu", self.allocated["cpu"])
+        Monitoring.default().update_resource_usage("memory", self.allocated["memory"])
+        Monitoring.default().update_resource_usage("gpu", self.allocated["gpu"])
         logger.info(f"Allocated resources: {requirements}")
 
     def release(self, requirements: Dict[str, Any]):
         self.allocated["cpu"] = max(0, self.allocated["cpu"] - requirements.get("cpu", 0))
         self.allocated["memory"] = max(0, self.allocated["memory"] - (requirements.get("memory", 0) * 1024))
         self.allocated["gpu"] = max(0, self.allocated["gpu"] - requirements.get("gpu", 0))
+        Monitoring.default().update_resource_usage("cpu", self.allocated["cpu"])
+        Monitoring.default().update_resource_usage("memory", self.allocated["memory"])
+        Monitoring.default().update_resource_usage("gpu", self.allocated["gpu"])
         logger.info(f"Released resources: {requirements}")
 
 class Scheduler:
@@ -74,6 +86,7 @@ class Scheduler:
         self.fastapi_app = FastAPI()
         self._setup_webhooks()
         self.scheduler.start()
+        self._setup_ci_cd_triggers()
 
     def _setup_webhooks(self):
         @self.fastapi_app.post("/webhook/{task_id}")
@@ -90,6 +103,68 @@ class Scheduler:
                 ))
                 self._enqueue_task(task_info)
             return {"status": "received"}
+
+        @self.fastapi_app.post("/ci-cd/{task_id}")
+        async def handle_ci_cd_trigger(task_id: str, request: Request):
+            payload = await request.json()
+            ctx = await WorkflowExecutionContext.get()
+            task_info = next((t for t in self.task_queue if t.task_id == task_id), None)
+            if not task_info:
+                raise HTTPException(status_code=404, detail="Task not found")
+            source = payload.get("source", "unknown")
+            if source == "github":
+                if not payload.get("action") == "completed":
+                    return {"status": "ignored"}
+            elif source == "jenkins":
+                if not payload.get("status") == "SUCCESS":
+                    return {"status": "ignored"}
+            logger.info(f"CI/CD trigger for task {task_id} from {source}")
+            ctx.events.append(ExecutionEvent(
+                type=ExecutionEventType.TASK_TRIGGERED,
+                source_id=task_id,
+                name=f"ci_cd_trigger_{source}",
+                value=payload
+            ))
+            self._enqueue_task(task_info)
+            return {"status": "received"}
+
+    def _setup_ci_cd_triggers(self):
+        @self.fastapi_app.post("/ci-cd/register/{task_id}")
+        async def register_ci_cd_trigger(task_id: str, request: Request):
+            config = await request.json()
+            task_info = next((t for t in self.task_queue if t.task_id == task_id), None)
+            if not task_info:
+                raise HTTPException(status_code=404, detail="Task not found")
+            if config.get("type") == "github":
+                # Register webhook with GitHub
+                github_repo = config.get("repo")
+                webhook_url = f"{Configuration.get().settings.api_url}/ci-cd/{task_id}"
+                headers = {"Authorization": f"Bearer {config.get('token')}"}
+                payload = {
+                    "name": "web",
+                    "active": True,
+                    "events": ["workflow_run"],
+                    "config": {"url": webhook_url, "content_type": "json"}
+                }
+                response = requests.post(
+                    f"https://api.github.com/repos/{github_repo}/hooks",
+                    json=payload,
+                    headers=headers
+                )
+                response.raise_for_status()
+                logger.info(f"Registered GitHub webhook for task {task_id}")
+            elif config.get("type") == "jenkins":
+                # Register Jenkins webhook (simplified)
+                logger.info(f"Registered Jenkins webhook for task {task_id}")
+            return {"status": "registered"}
+
+    def register_ci_cd_trigger(self, task_info: TaskInfo, config: Dict[str, Any]):
+        trigger_type = config.get("type")
+        if trigger_type in ["github", "jenkins"]:
+            heapq.heappush(self.task_queue, task_info)
+            logger.info(f"Registered {trigger_type} CI/CD trigger for task {task_info}")
+        else:
+            raise ValueError(f"Unsupported CI/CD trigger type: {trigger_type}")
 
     async def schedule_task(self, task_info: TaskInfo):
         try:
@@ -108,6 +183,14 @@ class Scheduler:
                 elif trigger_type == "http":
                     heapq.heappush(self.task_queue, task_info)  # HTTP tasks wait for webhook
                     logger.info(f"Registered HTTP trigger for task {task_info.task_id}")
+                elif trigger_type == "pubsub":
+                    pubsub_trigger = PubSubTrigger(
+                        task_info.event_trigger["project_id"],
+                        task_info.event_trigger["subscription_name"]
+                    )
+                    pubsub_trigger.start(task_info)
+                    # TODO fetch task_id instead
+                    logger.info(f"Registered Pub/Sub trigger for task {task_info}")
                 else:
                     raise ValueError(f"Unsupported event trigger type: {trigger_type}")
             else:

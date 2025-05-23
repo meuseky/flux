@@ -12,6 +12,7 @@ from flux.errors import ExecutionContextNotFoundError
 from flux.models import ExecutionEventModel
 from flux.models import SQLiteRepository
 from flux.models import WorkflowExecutionContextModel
+from flux.monitoring import Monitoring
 
 
 class ContextManager(ABC):
@@ -49,6 +50,7 @@ class SQLiteContextManager(ContextManager, SQLiteRepository):
                 # Cache the context for faster access
                 cache_manager = CacheManager.default()
                 cache_manager.set(f"context_{ctx.execution_id}", ctx, ttl=Configuration.get().settings.cache.default_ttl)
+                Monitoring.default().track_execution(ctx)  # Track metrics
             except IntegrityError:  # pragma: no cover
                 session.rollback()
                 raise
