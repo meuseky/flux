@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Optional, Dict
 import tomli
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,6 +31,15 @@ class ExecutorConfig(BaseConfig):
 
 class EncryptionConfig(BaseConfig):
     encryption_key: str | None = Field(default=None, description="Encryption key for sensitive data")
+
+class CacheConfig(BaseConfig):
+    backend: str = Field(default="file", description="Cache backend: 'file', 'redis', or 'memcached'")
+    default_ttl: Optional[int] = Field(default=None, description="Default cache TTL in seconds")
+    redis_host: str = Field(default="localhost", description="Redis host")
+    redis_port: int = Field(default=6379, description="Redis port")
+    redis_db: int = Field(default=0, description="Redis database")
+    memcached_host: str = Field(default="localhost", description="Memcached host")
+    memcached_port: int = Field(default=11211, description="Memcached port")
 
 class FluxConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FLUX_", env_nested_delimiter="__", case_sensitive=False)

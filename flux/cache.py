@@ -1,32 +1,34 @@
+# File: C:\Users\KMeuse\Desktop\Projects\flux\flux\cache.py
 from __future__ import annotations
-
-from pathlib import Path
-from typing import Any
-
-import dill
-
+from typing import Any, Optional
+from flux.cache_backends import CacheBackend, FileCacheBackend, RedisCacheBackend, MemcachedCacheBackend
 from flux.config import Configuration
 
-
 class CacheManager:
-    @staticmethod
-    def get(key: str) -> Any:
-        cache_file = CacheManager._get_file_name(key)
-        if cache_file.exists():
-            with open(cache_file, "rb") as f:
-                return dill.load(f)
-        return None
+    def __init__(self):
+        self.backend = self._get_backend()
+
+    def _get_backend(self) -> CacheBackend:
+        cache_config = Configuration.get().settings.cache
+        backend_type = cache_config.get("backend", "file")
+        if backend_type == "redis":
+            return RedisCacheBackend()
+        elif backend_type == "memcached":
+            return MemcachedCacheBackend()
+        return FileCacheBackend()
 
     @staticmethod
-    def set(key: str, value: Any) -> None:
-        cache_file = CacheManager._get_file_name(key)
-        with open(cache_file, "wb") as f:
-            dill.dump(value, f)
+    def default() -> CacheManager:
+        return CacheManager()
 
-    @staticmethod
-    def _get_file_name(key):
-        settings = Configuration.get().settings
-        cache_path = Path(settings.home) / settings.cache_path
-        cache_path.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_path / f"{key}.pkl"
-        return cache_file
+    def get(self, key: str, version: Optional[str] = None) -> Optional[Any]:
+        return self.backend.get(key)
+
+    def set(self, key: str, value: Any, ttl: Optional[int] = None, version: Optional[str] = None) -> None:
+        self.backend.set(key, value, ttl, version)
+
+    def delete(self, key: str) -> None:
+        self.backend.delete(key)
+
+    def validate(self, key: str, version: Optional[str] = None) -> bool:
+        return self.backend.validate(key, version)

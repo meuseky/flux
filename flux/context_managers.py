@@ -5,6 +5,8 @@ from abc import abstractmethod
 
 from sqlalchemy.exc import IntegrityError
 
+from flux import Configuration
+from flux.cache import CacheManager
 from flux.context import WorkflowExecutionContext
 from flux.errors import ExecutionContextNotFoundError
 from flux.models import ExecutionEventModel
@@ -27,9 +29,6 @@ class ContextManager(ABC):
 
 
 class SQLiteContextManager(ContextManager, SQLiteRepository):
-    def __init__(self):
-        super().__init__()
-
     def save(self, ctx: WorkflowExecutionContext):
         with self.session() as session:
             try:
@@ -47,11 +46,19 @@ class SQLiteContextManager(ContextManager, SQLiteRepository):
                 else:
                     session.add(WorkflowExecutionContextModel.from_plain(ctx))
                 session.commit()
+                # Cache the context for faster access
+                cache_manager = CacheManager.default()
+                cache_manager.set(f"context_{ctx.execution_id}", ctx, ttl=Configuration.get().settings.cache.default_ttl)
             except IntegrityError:  # pragma: no cover
                 session.rollback()
                 raise
 
     def get(self, execution_id: str | None) -> WorkflowExecutionContext:
+        # Check cache first
+        cache_manager = CacheManager.default()
+        ctx = cache_manager.get(f"context_{execution_id}")
+        if ctx:
+            return ctx
         with self.session() as session:
             context = session.get(WorkflowExecutionContextModel, execution_id)
             if context:

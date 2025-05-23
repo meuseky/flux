@@ -8,7 +8,8 @@ from typing import Generic
 from typing import TypeVar
 from uuid import uuid4
 
-from flux import ContextManager
+from flux import ContextManager, Configuration
+from flux.cache import CacheManager
 from flux.errors import ExecutionError
 from flux.events import ExecutionEvent
 from flux.events import ExecutionEventType
@@ -44,7 +45,17 @@ class WorkflowExecutionContext(Generic[WorkflowInputType]):
             name=self._name,
             value=state,
         ))
+        cache_manager = CacheManager.default()
+        cache_manager.set(f"checkpoint_{self._execution_id}", self, ttl=Configuration.get().settings.cache.default_ttl)
         ContextManager.default().save(self)
+
+    @staticmethod
+    async def resume(execution_id: str) -> WorkflowExecutionContext:
+        cache_manager = CacheManager.default()
+        ctx = cache_manager.get(f"checkpoint_{execution_id}")
+        if ctx:
+            return ctx
+        return ContextManager.default().get(execution_id)
 
     @staticmethod
     async def get() -> WorkflowExecutionContext:
