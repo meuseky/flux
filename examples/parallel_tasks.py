@@ -1,8 +1,5 @@
 from __future__ import annotations
-
-from flux import task
-from flux import workflow
-from flux import WorkflowExecutionContext
+from flux import task, workflow, WorkflowExecutionContext
 from flux.tasks import parallel
 
 
@@ -37,6 +34,14 @@ async def parallel_tasks_workflow(ctx: WorkflowExecutionContext[str]):
     return results
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
+    # Run with local execution
+    ctx = parallel_tasks_workflow.run("Joe")
+    print(ctx.to_json())
+
+    # Run with distributed execution
+    from flux.config import Configuration
+
+    Configuration().override(executor={"execution_mode": "distributed"})
     ctx = parallel_tasks_workflow.run("Joe")
     print(ctx.to_json())
