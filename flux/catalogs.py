@@ -8,6 +8,7 @@ from sqlalchemy import desc
 from sqlalchemy.exc import IntegrityError
 
 import flux.decorators as decorators
+from flux import CacheManager
 from flux.config import Configuration
 from flux.errors import WorkflowNotFoundError
 from flux.models import SQLiteRepository
@@ -70,7 +71,8 @@ class SQLiteWorkflowCatalog(WorkflowCatalog, SQLiteRepository):
                 version = existing_model.version + 1 if existing_model else 1
                 session.add(WorkflowModel(name, workflow, version))
                 session.commit()
-            except IntegrityError:  # pragma: no cover
+                CacheManager.default().invalidator.invalidate_by_tag(f"workflow:{name}")
+            except IntegrityError:
                 session.rollback()
                 raise
 

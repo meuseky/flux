@@ -8,7 +8,7 @@ import click
 import uvicorn
 
 import flux.decorators as decorators
-from flux import ContextManager
+from flux import ContextManager, CacheManager
 from flux.api import create_app
 from flux.catalogs import WorkflowCatalog
 from flux.config import Configuration
@@ -186,9 +186,11 @@ def debug_workflow(execution_id: str):
 @click.option("--host", "-h", default=None, help="Host to bind the server to.")
 @click.option("--port", "-p", default=None, help="Port to bind the server to.")
 def start(path: str, host: str | None = None, port: int | None = None):
-    """Start the server to execute Workflows via API."""
-    PluginManager.default().load_plugins()  # Load plugins on startup
+    PluginManager.default().load_plugins()
     settings = Configuration.get().settings
+    cache_manager = CacheManager.default()
+    workflows = WorkflowCatalog.create().all()
+    cache_manager.warm_up([f"workflow:{w.name}" for w in workflows])  # Preload workflow metadata
     uvicorn.run(
         create_app(path),
         port=port or settings.server_port,
