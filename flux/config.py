@@ -53,6 +53,7 @@ class FluxConfig(BaseSettings):
     local_storage_path: str = Field(default=".data", description="Path for local storage directory")
     serializer: str = Field(default="pkl", description="Default serializer (json or pkl)")
     database_url: str = Field(default="sqlite:///.flux/flux.db", description="Database URL")
+    database_type: str = Field(default="sqlite", description="Database type: 'sqlite' or 'postgresql'")
     executor: ExecutorConfig = Field(default_factory=ExecutorConfig)
     security: EncryptionConfig = Field(default_factory=EncryptionConfig)
     catalog: CatalogConfig = Field(default_factory=CatalogConfig)

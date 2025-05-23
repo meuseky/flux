@@ -33,25 +33,19 @@ class SQLiteContextManager(ContextManager, SQLiteRepository):
     def save(self, ctx: WorkflowExecutionContext):
         with self.session() as session:
             try:
-                context = session.get(
-                    WorkflowExecutionContextModel,
-                    ctx.execution_id,
-                )
+                context = session.get(WorkflowExecutionContextModel, ctx.execution_id)
                 if context:
                     context.output = ctx.output
-                    additional_events = self._get_additional_events(
-                        ctx,
-                        context,
-                    )
-                    context.events.extend(additional_events)
+                    additional_events = self._get_additional_events(ctx, context)
+                    session.bulk_save_objects(additional_events)  # Bulk insert events
                 else:
                     session.add(WorkflowExecutionContextModel.from_plain(ctx))
                 session.commit()
-                # Cache the context for faster access
                 cache_manager = CacheManager.default()
-                cache_manager.set(f"context_{ctx.execution_id}", ctx, ttl=Configuration.get().settings.cache.default_ttl)
-                Monitoring.default().track_execution(ctx)  # Track metrics
-            except IntegrityError:  # pragma: no cover
+                cache_manager.set(f"context_{ctx.execution_id}", ctx,
+                                  ttl=Configuration.get().settings.cache.default_ttl, tags={f"workflow:{ctx.name}"})
+                Monitoring.default().track_execution(ctx)
+            except IntegrityError:
                 session.rollback()
                 raise
 

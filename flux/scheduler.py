@@ -276,3 +276,16 @@ class FileEventHandler(FileSystemEventHandler):
         if not event.is_directory:
             logger.info(f"File trigger for task {self.task_info.task_id}: {event.src_path}")
             self.enqueue_callback(self.task_info)
+
+class LoadBalancer:
+    def __init__(self):
+        self.nodes = []  # List of (node_id, resource_manager)
+
+    def register_node(self, node_id: str, resource_manager: ResourceManager):
+        self.nodes.append((node_id, resource_manager))
+
+    def select_node(self, task_info: TaskInfo) -> Optional[str]:
+        for node_id, rm in self.nodes:
+            if rm.can_allocate(task_info.resource_requirements or {}):
+                return node_id
+        return None
